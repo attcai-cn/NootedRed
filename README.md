@@ -60,3 +60,6 @@ along with this work.  If not, see https://git.chefkiss.dev/ChefKiss/OpenKnowled
 
 Use `tools/build-branch.sh -y` to put the kext and zip under
 `build/branches/<branch>/...`. See [docs/Build-Artifacts.md](docs/Build-Artifacts.md).
+
+With only the Xcode Command Line Tools installed (no full Xcode, so no `xmake` or `xcodebuild`),
+use `tools/build-manual.sh` instead; it produces the same per-branch `NootedRed.kext`.
