@@ -80,10 +80,26 @@ public:
         size_t                          signatureCount{0};
     };
 
+    // Behaviour flags for a single `SignaturePatch` entry.
+    enum SignatureFlags : UInt32 {
+        // The entry is required: the resolver keeps scanning pages until it has been applied.
+        kSignatureRequired = 0,
+
+        // The entry is best-effort.  It is still applied when its signature matches, but the resolver
+        // stops doing a full page sweep even when it never matches.  Used for patches whose target
+        // code Apple restructured in a later build of the same major version.
+        kSignatureOptional = 1U << 0,
+    };
+
     // A masked-context signature used by the resolver backend.  `context` contains a window around the
     // patch site; 0xFF mask bytes must match, 0x00 bytes are wildcards.  `patchOffset` is relative to the
     // start of the matched context.  `pageOffset` can restrict the signature to a file/cache page offset;
     // pass UINT64_MAX for no restriction.
+    //
+    // `find` is re-checked at `patchOffset` before anything is written, so a context match alone never
+    // patches an unrelated site.  `satisfied` covers the case where Apple already changed the code to the
+    // state this patch wanted to reach: the entry then counts as applied without touching memory.  Keep
+    // `satisfiedSize` equal to `findSize`.
     struct SignaturePatch
     {
         const UInt8* context;
@@ -97,6 +113,9 @@ public:
         UInt64       pageOffset;
         const UInt8* find{nullptr};
         size_t       findSize{0};
+        const UInt8* satisfied{nullptr};
+        size_t       satisfiedSize{0};
+        UInt32       flags{kSignatureRequired};
     };
 
     // Lookup-style patch for one user-space Mach-O image.

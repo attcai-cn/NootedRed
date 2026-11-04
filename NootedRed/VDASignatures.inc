@@ -23,13 +23,16 @@ namespace
     static const UInt8 kVDAReplace_Identify[] = {0xBB, 0x05, 0x00, 0x00, 0x00};
 
     // 2. AddrLibInitVegaToRV: VAAddrLibInterface::init -> map family 0x8E (RV/Renoir) to addrlib family 0xD
+    //
+    // macOS 26.7.2 already compares against 0x8E, so the family byte is a wildcard here: the old driver
+    // needs the 0x8D -> 0x8E rewrite, the new one is caught by `kVDAReplace_AddrLibInit` as "satisfied".
     static const UInt8 kVDACtx_AddrLibInit[] = {
         0x41, 0x81, 0xFC, 0x82, 0x00, 0x00, 0x00, 0x74, 0x0E,
         0x41, 0x81, 0xFC, 0x8D, 0x00, 0x00, 0x00, 0x75, 0x09, 0xB8, 0x0D, 0x00, 0x00, 0x00
     };
     static const UInt8 kVDAMask_AddrLibInit[] = {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
     };
     static const UInt8 kVDAFind_AddrLibInit[]    = {0x41, 0x81, 0xFC, 0x8D, 0x00, 0x00, 0x00};
     static const UInt8 kVDAReplace_AddrLibInit[] = {0x41, 0x81, 0xFC, 0x8E, 0x00, 0x00, 0x00};
@@ -39,7 +42,7 @@ namespace
         0x74, 0x21, 0x3D, 0x8D, 0x00, 0x00, 0x00, 0x0F, 0x85, 0x00, 0x00, 0x00, 0x00
     };
     static const UInt8 kVDAMask_AddrLibCreate[] = {
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
+        0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
     };
     static const UInt8 kVDAFind_AddrLibCreate[]    = {0x3D, 0x8D, 0x00, 0x00, 0x00};
     static const UInt8 kVDAReplace_AddrLibCreate[] = {0x3D, 0x8E, 0x00, 0x00, 0x00};
@@ -62,7 +65,7 @@ namespace
         0x55, 0x48, 0x89, 0xE5, 0x8B, 0x87, 0x18, 0x5B, 0x00, 0x00
     };
     static const UInt8 kVDAMask_ConvertFamily_Modern[] = {
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
     };
 
@@ -77,6 +80,9 @@ namespace
     static const UInt8 kVDAReplace_EngineAndBlt[] = {0xB8, 0x02, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90, 0x90, 0x8D, 0x48, 0xFF, 0x83};
 
     // 6. ForceGfx9VideoProcessors: VAFactory color format/dithering/deblocker -> Gfx9 branch (23-byte high-entropy context)
+    //
+    // The `jae` opcode at index 13 is a wildcard: 26.7.2 ships `jmp` there already, which is the state this
+    // patch wants to reach, so the entry resolves as "satisfied" instead of being skipped.
     static const UInt8 kVDACtx_VideoProcessors[] = {
         0x55, 0x48, 0x89, 0xE5, 0x41, 0x56, 0x53,
         0x8D, 0x46, 0xFF, 0x83, 0xF8, 0x02, 0x72, 0x1F,
@@ -84,7 +90,7 @@ namespace
     };
     static const UInt8 kVDAMask_VideoProcessors[] = {
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF,
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
     };
     static const UInt8 kVDAFind_VideoProcessors[]    = {0x8D, 0x46, 0xFF, 0x83, 0xF8, 0x02, 0x72, 0x1F};
@@ -240,34 +246,43 @@ namespace
     constexpr size_t kVDAResolverSignatureCount_Sonoma = arrsize(kVDAResolverSignatures_Sonoma);
 
     // Resolver table for modern macOS (15 Sequoia, 26 Tahoe)
+    //
+    // `satisfied` mirrors `replace`: when a Tahoe point release has already rewritten the code to the
+    // state this patch wants, the entry resolves instead of silently counting as missing.  Entries marked
+    // `kSignatureOptional` are best-effort — Apple restructured their target functions in 26.7.2, so they
+    // are applied when they match but never block the "all applied" bookkeeping.
     static const UserPatches::SignaturePatch kVDAResolverSignatures_Modern[] = {
         {kVDACtx_Identify, kVDAMask_Identify, sizeof(kVDACtx_Identify), 17,
          kVDAReplace_Identify, sizeof(kVDAReplace_Identify), 0, 1, ~0ULL,
          kVDAFind_Identify, sizeof(kVDAFind_Identify)},
         {kVDACtx_AddrLibInit, kVDAMask_AddrLibInit, sizeof(kVDACtx_AddrLibInit), 9,
          kVDAReplace_AddrLibInit, sizeof(kVDAReplace_AddrLibInit), 0, 1, ~0ULL,
-         kVDAFind_AddrLibInit, sizeof(kVDAFind_AddrLibInit)},
+         kVDAFind_AddrLibInit, sizeof(kVDAFind_AddrLibInit),
+         kVDAReplace_AddrLibInit, sizeof(kVDAReplace_AddrLibInit)},
         {kVDACtx_AddrLibCreate, kVDAMask_AddrLibCreate, sizeof(kVDACtx_AddrLibCreate), 2,
          kVDAReplace_AddrLibCreate, sizeof(kVDAReplace_AddrLibCreate), 0, 1, ~0ULL,
-         kVDAFind_AddrLibCreate, sizeof(kVDAFind_AddrLibCreate)},
+         kVDAFind_AddrLibCreate, sizeof(kVDAFind_AddrLibCreate),
+         kVDAReplace_AddrLibCreate, sizeof(kVDAReplace_AddrLibCreate)},
         {kVDACtx_ConvertFamily_Modern, kVDAMask_ConvertFamily_Modern, sizeof(kVDACtx_ConvertFamily_Modern), 0,
          kVDAReplace_ConvertFamily, sizeof(kVDAReplace_ConvertFamily), 0, 1, ~0ULL,
-         kVDAFind_ConvertFamily, sizeof(kVDAFind_ConvertFamily)},
+         kVDAFind_ConvertFamily, sizeof(kVDAFind_ConvertFamily),
+         kVDAReplace_ConvertFamily, sizeof(kVDAReplace_ConvertFamily)},
         {kVDACtx_ConvertFamily_Ventura, kVDAMask_ConvertFamily_Ventura, sizeof(kVDACtx_ConvertFamily_Ventura), 0,
          kVDAReplace_ConvertFamily, sizeof(kVDAReplace_ConvertFamily), 0, 1, ~0ULL,
-         kVDAFind_ConvertFamily, sizeof(kVDAFind_ConvertFamily)},
+         kVDAFind_ConvertFamily, sizeof(kVDAFind_ConvertFamily), nullptr, 0, UserPatches::kSignatureOptional},
         {kVDACtx_EngineAndBlt, kVDAMask_EngineAndBlt, sizeof(kVDACtx_EngineAndBlt), 0,
          kVDAReplace_EngineAndBlt, sizeof(kVDAReplace_EngineAndBlt), 0, 2, ~0ULL,
-         kVDAFind_EngineAndBlt, sizeof(kVDAFind_EngineAndBlt)},
+         kVDAFind_EngineAndBlt, sizeof(kVDAFind_EngineAndBlt), nullptr, 0, UserPatches::kSignatureOptional},
         {kVDACtx_VideoProcessors, kVDAMask_VideoProcessors, sizeof(kVDACtx_VideoProcessors), 7,
          kVDAReplace_VideoProcessors, sizeof(kVDAReplace_VideoProcessors), 0, 3, ~0ULL,
-         kVDAFind_VideoProcessors, sizeof(kVDAFind_VideoProcessors)},
+         kVDAFind_VideoProcessors, sizeof(kVDAFind_VideoProcessors),
+         kVDAReplace_VideoProcessors, sizeof(kVDAReplace_VideoProcessors)},
         {kVDACtx_EncFeedbackStride, kVDAMask_EncFeedbackStride, sizeof(kVDACtx_EncFeedbackStride), 4,
          kVDAReplace_EncFeedbackStride, sizeof(kVDAReplace_EncFeedbackStride), 0, 1, ~0ULL,
-         kVDAFind_EncFeedbackStride, sizeof(kVDAFind_EncFeedbackStride)},
+         kVDAFind_EncFeedbackStride, sizeof(kVDAFind_EncFeedbackStride), nullptr, 0, UserPatches::kSignatureOptional},
         {kVDACtx_StatusStride_Modern, kVDAMask_StatusStride_Modern, sizeof(kVDACtx_StatusStride_Modern), 3,
          kVDAReplace_StatusStride_Modern, sizeof(kVDAReplace_StatusStride_Modern), 0, 2, ~0ULL,
-         kVDAFind_StatusStride_Modern, sizeof(kVDAFind_StatusStride_Modern)},
+         kVDAFind_StatusStride_Modern, sizeof(kVDAFind_StatusStride_Modern), nullptr, 0, UserPatches::kSignatureOptional},
         {kVDACtx_SourcePitch_Modern, kVDAMask_SourcePitch_Modern, sizeof(kVDACtx_SourcePitch_Modern), 0,
          kVDAReplace_SourcePitch_Modern, sizeof(kVDAReplace_SourcePitch_Modern), 0, 1, ~0ULL,
          kVDAFind_SourcePitch_Modern, sizeof(kVDAFind_SourcePitch_Modern)},

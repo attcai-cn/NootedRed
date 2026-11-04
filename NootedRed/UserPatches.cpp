@@ -504,7 +504,8 @@ auto UserPatches::installNativePagePatcher(KernelPatcher& patcher) -> bool
     return true;
 }
 
-static bool matchSignature(const UInt8* const bytes, const UserPatches::SignaturePatch& sig, size_t& matchOffset, size_t startOffset = 0)
+static bool matchSignature(const UInt8* const bytes, const UserPatches::SignaturePatch& sig, size_t& matchOffset,
+                           size_t startOffset = 0, bool* alreadySatisfied = nullptr)
 {
     if (sig.context == nullptr || sig.mask == nullptr || sig.replace == nullptr) { return false; }
     if (sig.contextSize == 0 || sig.contextSize > UserPatches::kPageSize) { return false; }
@@ -520,10 +521,21 @@ static bool matchSignature(const UInt8* const bytes, const UserPatches::Signatur
             }
         }
         if (matches) {
+            bool satisfied = false;
             if (sig.find != nullptr && sig.findSize > 0) {
-                if (offset + sig.patchOffset + sig.findSize > UserPatches::kPageSize ||
-                    memcmp(bytes + offset + sig.patchOffset, sig.find, sig.findSize) != 0) {
-                    continue;
+                const size_t site = offset + sig.patchOffset;
+                if (site + sig.findSize > UserPatches::kPageSize) { continue; }
+
+                if (memcmp(bytes + site, sig.find, sig.findSize) != 0) {
+                    // A later build of the same macOS major version may already carry the state this
+                    // patch wants to reach.  Accept it as applied instead of reporting a missing site.
+                    if (sig.satisfied != nullptr && sig.satisfiedSize == sig.findSize
+                        && site + sig.satisfiedSize <= UserPatches::kPageSize
+                        && memcmp(bytes + site, sig.satisfied, sig.satisfiedSize) == 0) {
+                        satisfied = true;
+                    } else {
+                        continue;
+                    }
                 }
             }
 
@@ -532,6 +544,7 @@ static bool matchSignature(const UInt8* const bytes, const UserPatches::Signatur
                 continue;
             }
             matchOffset = offset;
+            if (alreadySatisfied != nullptr) { *alreadySatisfied = satisfied; }
             return true;
         }
     }
@@ -584,6 +597,7 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
         if (VCNBridge::singleton().loadReady() && !isFairPlayClient(current_task())) {
             bool vdaAllApplied = true;
             for (size_t i = 0; i < this->vdaSignatureCount && i < kMaxVDASignatures; ++i) {
+                if ((this->vdaSignatures[i].flags & kSignatureOptional) != 0) { continue; }
                 if (this->vdaSignatureApplied[i] < this->vdaSignatures[i].count) {
                     vdaAllApplied = false;
                     break;
@@ -599,13 +613,27 @@ void UserPatches::patchSignaturePage(const void* const data, const UInt64 pageOf
 
                     size_t matchOffset = 0;
                     size_t searchOffset = 0;
+                    bool   alreadySatisfied = false;
                     while (sigIdx < kMaxVDASignatures && this->vdaSignatureApplied[sigIdx] < sig.count &&
-                           matchSignature(bytes, sig, matchOffset, searchOffset)) {
+                           matchSignature(bytes, sig, matchOffset, searchOffset, &alreadySatisfied)) {
                         // Layer 4: Page boundary verification
                         if (matchOffset + sig.patchOffset + sig.replaceSize > kPageSize) {
                             SYSLOG("UserPatch", "Resolver: VDA patch out of page bounds (0x%zX + 0x%zX + 0x%zX)",
                                    matchOffset, sig.patchOffset, sig.replaceSize);
                             break;
+                        }
+
+                        if (alreadySatisfied) {
+                            // The running driver already carries the intended state, so only account for
+                            // the entry. Writing the same bytes back would be a pointless protected write.
+                            SYSLOG("UserPatch",
+                                   "Resolver VDA signature %zu already satisfied by the driver (site %zu/%zu) at page offset 0x%zX",
+                                   sigIdx, this->vdaSignatureApplied[sigIdx] + 1, sig.count, matchOffset);
+                            this->vdaSignatureApplied[sigIdx]++;
+                            const auto applied = static_cast<UInt32>(OSIncrementAtomic(&this->vdaAppliedCount) + 1);
+                            NRed::singleton().setProp32("NRedVCNUserApplied", applied);
+                            searchOffset = matchOffset + sig.contextSize;
+                            continue;
                         }
 
                         if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
